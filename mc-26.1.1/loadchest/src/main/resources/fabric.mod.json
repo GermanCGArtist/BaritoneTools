@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "loadchest",
+  "version": "${version}",
+  "name": "LoadChest (Baritone addon)",
+  "description": "Adds /loadchest: Baritone walks to the nearest chest and deposits your items.",
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.loadchest.LoadChestMod"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "fabric-api": "*",
+    "minecraft": "~26.1.1",
+    "baritone": "*",
+    "java": ">=25"
+  }
+}

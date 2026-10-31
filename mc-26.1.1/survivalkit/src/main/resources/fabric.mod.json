@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "survivalkit",
+  "version": "${version}",
+  "name": "SurvivalKit (Baritone addon)",
+  "description": "Keeps Baritone alive: eats, fights nearby mobs, sleeps at night and restocks supplies from a chest.",
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.survivalkit.SurvivalKitMod"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "fabric-api": "*",
+    "minecraft": "~26.1.1",
+    "baritone": "*",
+    "java": ">=25"
+  }
+}

@@ -1,0 +1,11 @@
+# build output / caches
+build/
+.gradle/
+run/
+.idea/
+*.iml
+# local helper folders used by build.bat (portable JDK, short temp dir)
+/tools/
+/tmp/
+# the Baritone API jar is downloaded, not committed
+libs/*.jar
