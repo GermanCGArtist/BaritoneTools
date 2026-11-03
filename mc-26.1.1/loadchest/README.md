@@ -27,6 +27,9 @@ The saved chest is stored in `config/loadchest.json` (no dimension check – use
 Both settings are saved. Typical setup: look at the chest, `/loadchest set`, `/loadchest auto on`, `/loadchest pickup on`, then `#mine diamond_ore`.
 Both work as temporary Baritone processes, so `#stop` also cancels a chest trip, and a chest trip no longer cancels `#mine`.
 
+## Only while Baritone is running
+Auto-empty and pickup only act while a Baritone task is running (`#mine`, `#farm`, `#build`, ...). Manual `/loadchest` commands work any time.
+
 ## Keep rules
 - `/loadchest keep <item> <count>` – always keep that many; the rest is deposited (`dirt 128`)
 - `/loadchest keep <item> -1` – never deposit this item (`-1` = keep all)
@@ -51,3 +54,12 @@ Items are taken from the main inventory first; the hotbar is only used if enable
 - Whole stacks are shift-clicked; a stack that must be split (e.g. keep 20 of 64) is moved with pick-up/put-back clicks, one click every 2 ticks.
 - Items the chest has no room for are skipped.
 - MC 26.1 is unobfuscated, so the code uses official Mojang names (no Yarn).
+
+## Never deposited
+Tools (pickaxe, axe, shovel, hoe, sword, shears, bucket, bow, ...) and everything on SurvivalKit's restock list (`/survival want`) are always kept, whatever the keep rules say.
+
+## Empty at base
+With auto-empty on, passing within `baseRadius` (default 24, `/loadchest nearbase <blocks>`) of the deposit chest, supply chest, return chest or bed while Baritone works, and carrying 8+ stacks of loot, empties the inventory on the way (at most every 3 min). `/loadchest nearbase on|off`.
+
+## 1.6.2
+Work items with enchantments (SurvivalKit) are understood: the item part is protected from depositing.

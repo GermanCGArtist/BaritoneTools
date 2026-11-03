@@ -35,6 +35,7 @@ final class DefenceProcess extends Feature {
     private static final double REACH = 3.0;
     private static final int MAX_FIGHT = 20 * 25;     // give up on a mob that we cannot kill/reach in 25 s
 
+    private final java.util.Set<Integer> fought = new java.util.HashSet<>();
     private Monster target;
     private int fightTimer;
     private boolean warnedWeapon;
@@ -58,7 +59,7 @@ final class DefenceProcess extends Feature {
             return false;
         }
         if (target != null && (!target.isAlive() || target.distanceToSqr(p) > LOSE_RANGE * LOSE_RANGE)) target = null;
-        if (target == null) {
+        if (target == null && Util.mayAct()) {
             target = findThreat(mc, p);
             fightTimer = 0;
         }
@@ -134,6 +135,8 @@ final class DefenceProcess extends Feature {
         boolean aimed = Math.abs(dYaw) < 12f && Math.abs(dPitch) < 12f;
         if (dist <= REACH && aimed && p.getAttackStrengthScale(0.5f) >= 1.0f && p.hasLineOfSight(target)) {
             mc.gameMode.attack(p, target);
+            if (fought.size() > 500) fought.clear();
+            if (fought.add(target.getId())) Session.count("mobs fought");
             p.swing(InteractionHand.MAIN_HAND);
         }
     }

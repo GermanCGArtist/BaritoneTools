@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "baritonequeue",
+  "version": "${version}",
+  "name": "Baritone Queue (Baritone addon)",
+  "description": "Type a list of Baritone commands and run them one after another, for example clear the trees, then clear the area.",
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.baritonequeue.QueueMod"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "fabric-api": "*",
+    "minecraft": "~26.1.1",
+    "baritone": "*",
+    "java": ">=25"
+  }
+}

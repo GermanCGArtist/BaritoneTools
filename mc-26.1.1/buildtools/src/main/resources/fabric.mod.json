@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "buildtools",
+  "version": "${version}",
+  "name": "BuildTools (Baritone addon)",
+  "description": "Helps Baritone's builder: plugs/drains flowing water that blocks it, and fills a selected area with water using buckets.",
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.buildtools.BuildToolsMod"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "fabric-api": "*",
+    "minecraft": "~26.1.1",
+    "baritone": "*",
+    "java": ">=25"
+  }
+}

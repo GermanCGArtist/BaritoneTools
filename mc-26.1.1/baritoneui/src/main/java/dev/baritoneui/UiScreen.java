@@ -13,12 +13,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The Baritone UI: four tabs (common settings, every setting, LoadChest, SurvivalKit), a search box and a scrolling
+ * The Baritone UI: five tabs (common settings, every setting, LoadChest, SurvivalKit, BuildTools), a search box and a scrolling
  * list of rows. It does not pause a singleplayer world, so a running task keeps going while it is open.
  */
 final class UiScreen extends Screen {
     private enum Tab {
-        COMMON("Common"), ALL("All settings"), LOADCHEST("LoadChest"), SURVIVAL("SurvivalKit");
+        COMMON("Common"), ALL("All settings"), LOADCHEST("LoadChest"), SURVIVAL("SurvivalKit"), BUILD("BuildTools");
 
         final String title;
 
@@ -27,7 +27,7 @@ final class UiScreen extends Screen {
         }
     }
 
-    private record Label(String text, int x, int y) {}
+    private record Label(String text, String tip, int x, int y, int width) {}
 
     private static final int ROW_HEIGHT = 24;
     private static final int LIST_TOP = 74;
@@ -59,7 +59,7 @@ final class UiScreen extends Screen {
     protected void init() {
         rowWidgets.clear();
 
-        int buttonWidth = 90, gap = 4;
+        int buttonWidth = 80, gap = 4;
         Tab[] tabs = Tab.values();
         int x0 = (width - (tabs.length * buttonWidth + (tabs.length - 1) * gap)) / 2;
         for (int i = 0; i < tabs.length; i++) {
@@ -95,6 +95,7 @@ final class UiScreen extends Screen {
             case ALL -> Tabs.all();
             case LOADCHEST -> Tabs.loadChest();
             case SURVIVAL -> Tabs.survivalKit();
+            case BUILD -> Tabs.buildTools();
         };
         layoutRows();
     }
@@ -119,7 +120,7 @@ final class UiScreen extends Screen {
         for (int i = scroll; i < Math.min(rows.size(), scroll + perPage); i++) {
             int y = LIST_TOP + (i - scroll) * ROW_HEIGHT;
             Row row = rows.get(i);
-            labels.add(new Label(row.label(), left, y + 6));
+            labels.add(new Label(row.label(), row.tip(), left, y, contentWidth - controlWidth - 6));
             row.controls(this, left + contentWidth - controlWidth, y, controlWidth);
         }
     }
@@ -151,7 +152,14 @@ final class UiScreen extends Screen {
     public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float partialTick) {
         super.extractRenderState(g, mouseX, mouseY, partialTick);
         g.centeredText(font, title, width / 2, 8, 0xFFFFFFFF);
-        for (Label l : labels) g.text(font, l.text(), l.x(), l.y(), 0xFFE0E0E0);
+        for (Label l : labels) g.text(font, font.plainSubstrByWidth(l.text(), l.width()), l.x(), l.y() + 6, 0xFFE0E0E0);
+        // hovering over the label (or its row) explains the setting
+        for (Label l : labels) {
+            if (l.tip() != null && mouseY >= l.y() && mouseY < l.y() + ROW_HEIGHT - 2 && mouseX >= l.x() && mouseX < l.x() + l.width() + 176) {
+                g.setTooltipForNextFrame(font, font.split(Component.literal(l.tip()), 220), mouseX, mouseY);
+                break;
+            }
+        }
 
         List<Row> rows = visibleRows();
         String footer = rows.isEmpty()

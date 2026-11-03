@@ -37,6 +37,10 @@ abstract class Feature implements IBaritoneProcess {
     @Override
     public final boolean isActive() {
         try {
+            if (PauseWatch.paused) {   // #pause: stand down completely
+                if (busy()) onLostControl();
+                return false;
+            }
             return active();
         } catch (Throwable t) {
             crashed(t);

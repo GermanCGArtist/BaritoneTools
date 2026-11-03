@@ -20,6 +20,18 @@ interface Row {
     /** Adds the controls; (x, y) is the top-left of the control area and w its width. */
     void controls(UiScreen s, int x, int y, int w);
 
+    /** Explanation shown when the mouse is over the row; null = none. */
+    default String tip() { return null; }
+
+    /** The same row, with a hover explanation. */
+    static Row tip(Row row, String tip) {
+        return new Row() {
+            public String label() { return row.label(); }
+            public String tip() { return tip; }
+            public void controls(UiScreen s, int x, int y, int w) { row.controls(s, x, y, w); }
+        };
+    }
+
     // ------------------------------------------------------------------ factories
 
     static Component onOff(boolean on) {
@@ -90,6 +102,50 @@ interface Row {
             public String label() { return label; }
             public void controls(UiScreen s, int x, int y, int w) {
                 s.add(Button.builder(Component.literal(buttonText), btn -> run.run()).bounds(x, y, w, 20).build());
+            }
+        };
+    }
+
+    /** A plain button that changes the list afterwards (the rows are rebuilt). */
+    static Row actionRefresh(String label, String buttonText, Runnable run) {
+        return new Row() {
+            public String label() { return label; }
+            public void controls(UiScreen s, int x, int y, int w) {
+                s.add(Button.builder(Component.literal(buttonText), btn -> {
+                    run.run();
+                    s.refresh();
+                }).bounds(x, y, w, 20).build());
+            }
+        };
+    }
+
+    /** A line with a red Remove button. */
+    static Row removeButton(String label, Runnable remove) {
+        return new Row() {
+            public String label() { return label; }
+            public void controls(UiScreen s, int x, int y, int w) {
+                s.add(Button.builder(Component.literal("Remove").withStyle(ChatFormatting.RED), btn -> {
+                    remove.run();
+                    s.refresh();
+                }).bounds(x, y, w, 20).build());
+            }
+        };
+    }
+
+    /** One free-text field and an Add button. */
+    static Row addText(String label, String hint, Consumer<String> add) {
+        return new Row() {
+            public String label() { return label; }
+            public void controls(UiScreen s, int x, int y, int w) {
+                EditBox box = s.add(new EditBox(s.font(), x, y, w - 42, 20, Component.literal(label)));
+                box.setHint(Component.literal(hint));
+                box.setMaxLength(200);
+                s.add(Button.builder(Component.literal("Add"), btn -> {
+                    String text = box.getValue().trim();
+                    if (text.isEmpty()) return;
+                    add.accept(text);
+                    s.refresh();
+                }).bounds(x + w - 38, y, 38, 20).build());
             }
         };
     }

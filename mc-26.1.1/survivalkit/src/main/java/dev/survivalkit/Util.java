@@ -61,6 +61,78 @@ final class Util {
         msg("PROBLEM: " + text);
     }
 
+    /** Features only start while a Baritone task is running, unless "always" is switched on. */
+    static boolean mayAct() {
+        return !PauseWatch.paused && (dev.survivalkit.Config.cfg.always || baritoneBusy() || Recovery.waiting);
+    }
+
+    /** True while LoadChest is walking to / using its chest. */
+    static boolean loadChestBusy() {
+        var control = baritone().getPathingControlManager().mostRecentInControl();
+        return control.isPresent() && String.valueOf(control.get().displayName()).contains("LoadChest");
+    }
+
+    private static List<BlockPos> sites = List.of();
+    private static int sitesAge = 1000;
+
+    /** Within baseRadius of the supply chest, return chest, bed or LoadChest's deposit chest. */
+    static boolean nearBase(LocalPlayer p) {
+        var cfg = dev.survivalkit.Config.cfg;
+        if (++sitesAge > 40) {
+            sitesAge = 0;
+            java.util.ArrayList<BlockPos> out = new java.util.ArrayList<>();
+            for (int[] a : new int[][]{cfg.supply, cfg.returnChest, cfg.bed}) if (a != null) out.add(pos(a));
+            for (int[] a : cfg.extraSupplies) out.add(pos(a));
+            try {
+                var path = net.fabricmc.loader.api.FabricLoader.getInstance().getConfigDir().resolve("loadchest.json");
+                if (java.nio.file.Files.exists(path)) {
+                    try (var r = java.nio.file.Files.newBufferedReader(path)) {
+                        var o = com.google.gson.JsonParser.parseReader(r).getAsJsonObject();
+                        if (o.has("chest") && o.get("chest").isJsonArray() && o.getAsJsonArray("chest").size() >= 3) {
+                            var a = o.getAsJsonArray("chest");
+                            out.add(new BlockPos(a.get(0).getAsInt(), a.get(1).getAsInt(), a.get(2).getAsInt()));
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            sites = out;
+        }
+        long r2 = (long) cfg.baseRadius * cfg.baseRadius;
+        BlockPos me = p.blockPosition();
+        for (BlockPos s : sites) if (s.distSqr(me) <= r2) return true;
+        return false;
+    }
+
+    /** Ticks until the current path segment ends, or -1 when Baritone has no path. */
+    static double segmentTicks() {
+        return baritone().getPathingBehavior().ticksRemainingInSegment().orElse(-1.0);
+    }
+
+    /**
+     * True when the next `n` steps of Baritone's path are plain walking: same height, free space to walk into and solid
+     * ground under it. Then eating while it keeps walking cannot make it mine, place or jump wrongly.
+     */
+    static boolean easyWalkAhead(LocalPlayer p, int n) {
+        var cur = baritone().getPathingBehavior().getCurrent();
+        var level = Minecraft.getInstance().level;
+        if (cur == null || level == null || !p.onGround() || p.isInWater()) return false;
+        var movements = cur.getPath().movements();
+        int from = cur.getPosition();
+        if (from >= movements.size()) return false;
+        for (int i = from; i < Math.min(movements.size(), from + n); i++) {
+            var m = movements.get(i);
+            BlockPos src = m.getSrc(), dest = m.getDest();
+            if (dest.getY() != src.getY()) return false;
+            if (Math.abs(dest.getX() - src.getX()) + Math.abs(dest.getZ() - src.getZ()) > 2) return false;
+            if (level.getBlockState(dest).blocksMotion() || level.getBlockState(dest.above()).blocksMotion()) return false;
+            if (!level.getBlockState(dest).getFluidState().isEmpty() || !level.getBlockState(dest.above()).getFluidState().isEmpty()) return false;
+            var below = level.getBlockState(dest.below());
+            if (!below.isFaceSturdy(level, dest.below(), net.minecraft.core.Direction.UP)) return false;
+        }
+        return true;
+    }
+
     static String pathOf(ItemStack st) {
         return BuiltInRegistries.ITEM.getKey(st.getItem()).getPath();
     }
@@ -121,7 +193,7 @@ final class Util {
     /** Whether the stack matches a rule key: an item id fragment, or @food. */
     static boolean matches(ItemStack st, String key) {
         if (st.isEmpty()) return false;
-        return key.equals("@food") ? isGoodFood(st) : pathOf(st).contains(key);
+        return WantRule.of(key).matches(st);
     }
 
     /** How many usable items matching the rule the player carries (main inventory + hotbar). */
@@ -142,6 +214,11 @@ final class Util {
     /** Swaps an inventory item into the given hotbar slot (0-8) using the player's inventory menu. */
     static void swapIntoHotbar(Minecraft mc, LocalPlayer p, int invIndex, int hotbar) {
         mc.gameMode.handleContainerInput(p.inventoryMenu.containerId, menuSlot(invIndex), hotbar, ContainerInput.SWAP, p);
+    }
+
+    /** Swaps an inventory item (index 0-35) with the off-hand slot; doing it again swaps back. */
+    static void swapWithOffhand(Minecraft mc, LocalPlayer p, int invIndex) {
+        mc.gameMode.handleContainerInput(p.inventoryMenu.containerId, menuSlot(invIndex), 40, ContainerInput.SWAP, p);
     }
 
     static BlockPos pos(int[] a) {

@@ -21,15 +21,20 @@ Built to be server-friendly: vanilla timing only (hold-to-eat, full weapon coold
 | `/survival golden on\|off` | eat a golden apple at 4 hearts or less when the food bar is already full (default on) |
 | `/survival background on\|off` | keep running when the game window loses focus (default on, see below) |
 | `/survival debug on\|off` | extra messages about what it is doing |
+| `/survival always on\|off` | also act when no Baritone task is running (default **off**, see below) |
 | `/survival defence on\|off` | fight hostile mobs |
 | `/survival sleep on\|off` / `sleep now` | sleep at night / go to bed right now |
 | `/survival bed set [x y z]` / `bed clear` | the bed to sleep in |
 | `/survival restock on\|off` / `restock now` | auto-restock / restock right now |
 | `/survival supply set [x y z]` / `supply clear` | the supply chest (chest or barrel) |
+| `/survival return set [x y z]` / `return clear` | optional chest where worn-out tools are dropped off |
 | `/survival want <item> <count>` | carry this many (item id fragment, or `food` for any safe food) |
 | `/survival want remove <item>` / `want list` | edit the want-list |
 
 Settings are saved in `config/survivalkit.json`.
+
+## Only while Baritone is running
+By default every feature stays **idle unless a Baritone task is running** (`#mine`, `#farm`, `#build`, `#sel ca`, `#goto`, ...). So it never eats for you, fights for you, walks you to bed or restocks while you play by hand. `/survival always on` turns that off (it then acts any time). The manual commands (`sleep now`, `restock now`) always work. A fight that has already started is finished even if the task ends.
 
 ## What each feature does
 **Eat** – Stays at full health: it eats whenever you are hurt and the food bar isn't full (natural healing needs a full-ish bar), and whenever the food bar is at the `eatbelow` level or lower. With a full food bar and 4 hearts or less it eats a golden apple instead. It picks the best safe food (not rotten flesh, spider eyes, pufferfish, raw chicken, golden apples, ...), holds right-click until done and puts the hotbar back like it was. Food in the main inventory is swapped in and out again.
@@ -39,7 +44,7 @@ Settings are saved in `config/survivalkit.json`.
 **Sleep** – At night (overworld only), while a Baritone task is running, it walks to the saved bed, sleeps until morning and then carries on. If it can't sleep (monsters nearby, not night yet, server refuses) it tries again after a minute. On servers the night is only skipped if enough players sleep, but you wake up at dawn anyway.
 
 **Restock** – Every rule on the want-list is checked every 2 seconds. When a stock is below **half** of the wanted amount (e.g. fewer than 8 of `@food 16`), it walks to the supply chest and tops **all** rules up to the wanted amount. Worn-out tools don't count as stock and are never taken.
-- **Works with Baritone's item saver** (`#set itemSaver true`, `#set itemSaverThreshold <n>`): a tool counts as worn out at exactly the moment Baritone stops using it. The moment one hits that limit (and you carry fewer than wanted) a restock starts right away, within about a second, no matter how much of the rest is left. The worn tool is handed back into the supply chest (so you can repair it) *before* the new one is taken, so the replacement lands in the **hotbar**, where Baritone looks for tools. Without the item saver, a tool counts as worn at over 80% damage. If the chest can't fill a rule, that rule is skipped for 5 minutes.
+- **Works with Baritone's item saver** (`#set itemSaver true`, `#set itemSaverThreshold <n>`): a tool counts as worn out at exactly the moment Baritone stops using it. The moment one hits that limit (and you carry fewer than wanted) a restock starts right away, within about a second, no matter how much of the rest is left. The worn tool is handed back (so you can repair it) *before* the new one is taken, so the replacement lands in the **hotbar**, where Baritone looks for tools. By default it goes into the supply chest; with a **return chest** (`/survival return set`) the bot first walks to the return chest, drops all worn tools there, and then goes to the supply chest for the replacement. If the return chest is full or missing it tells you in chat. Without the item saver, a tool counts as worn at over 80% damage. If the chest can't fill a rule, that rule is skipped for 5 minutes.
 - `<item>` matches part of the item id: `torch`, `_pickaxe`, `cooked_beef`, `golden_carrot`. Write names without `minecraft:`.
 - `food` matches any safe food (it is stored as `@food`; `"@food"` in quotes works too).
 
@@ -60,3 +65,26 @@ Put it in `mods/` with Fabric API and **`baritone-api-fabric-1.18.0.jar`** (not 
 - Restock and sleep only start while a Baritone task is running; `restock now` / `sleep now` work any time.
 - Restock and sleep need the bed/chest to be loaded (within render distance) to start.
 - Armor is not handled yet.
+
+## Auto-respawn
+`/survival respawn on|off` (default on): clicks Respawn two seconds after you die and warns in chat with the death position. The Baritone task is lost on death and nothing walks back for the items.
+
+## Top-up at base
+When Baritone passes within `baseRadius` (default 24, `/survival baseradius <blocks>`) of a chest or the bed and something on the want-list is under 75%, it refills right then instead of waiting for "under half" and making a separate trip later. At most every 3 min, never while LoadChest is on its way (so it empties first, then restocks). `/survival topup on|off`.
+
+## Resume after death
+Baritone drops its task when you die. With `/survival resume on` (default), if a task was running (`#mine`, `#sel ca`/`replace`/..., `#build`, `#farm`, `#goto`, ...), the same command is run again after the respawn: first you get healthy (80%+, eating and fighting are allowed meanwhile) and no monster may be within 16 blocks. Waits at most 10 minutes; the third death within 10 minutes ends it. `#stop`/`#cancel` or starting something else cancels it. With the Baritone Queue addon, the queue resumes its current step instead.
+
+## Bed before dusk
+Instead of waiting for darkness, the bed trip is timed from the distance: walking time = distance x 5.5 ticks per block + slack (`/survival bedlead <seconds>`, default 20). From noon on, when `12300 - time of day <= walking time`, it leaves, so it arrives at dusk before hostile mobs spawn, then waits at the bed until beds work (tick 12542), sleeps, and carries on in the morning. A bed 300 blocks away means leaving around tick 10400; one 20 blocks away around tick 12100. `/survival bedplan on|off` (default on); off = go only once it is already night. Overworld only, and like every feature only while a Baritone task runs.
+
+## Empty supply chest (1.10.1)
+If a trip finds none of a wanted item, the next look waits 1, 2, 4, 8, 16, then 30 minutes (5 minutes first when nothing is running), instead of every minute. `/survival restock now` resets this.
+
+## 1.11.0
+- **Work items with enchantments:** `/survival workitem minecraft:diamond_pickaxe 2 efficiency 5;mending` (item, count, optional enchantments, minimum levels). Without enchantments any such item counts. Edit them in the BaritoneUI editor (SurvivalKit tab > Work items).
+- **Several supply chests:** `/survival supply add|remove|list`. Every opened chest is remembered (`/survival chests`, `/survival find <item>`); the restock visits the chest that has what is missing first and goes on to the next if something is still short.
+- **Weather:** a thunderstorm counts like night (monsters spawn in daylight, beds work). `/survival weather on|off`.
+- **Better bed trip:** the walking pace is learned from every trip (`ticks per block`), so the departure time gets more exact.
+- **Reconnect:** after the server drops the connection it reconnects (10 s, 20 s ... 5 min, 8 tries) and resumes the queue step or the last task. `/survival reconnect on|off`. Leaving through the menu yourself cancels it.
+- **Session report:** `/survival report` (time, distance, meals, restocks, sleeps, deaths, disconnects); saved to config/survivalkit-sessions.log on a disconnect or `/survival report reset`.

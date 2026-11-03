@@ -17,15 +17,21 @@ import static dev.survivalkit.Config.cfg;
 
 /** At night: walk to the saved bed, sleep until morning, then hand control back to the task that was running. */
 final class SleepProcess extends Feature {
-    private enum State { IDLE, PATHING, ENTERING, SLEEPING }
+    private enum State { IDLE, PATHING, WAITING, ENTERING, SLEEPING }
 
-    private static final int PATH_TIMEOUT = 20 * 90;
+    private static final int MIN_PATH_TIMEOUT = 20 * 90;
+    /** Dusk: hostile mobs start to spawn outdoors about now; beds can be used from tick 12542. */
+    private static final long ARRIVE_BY = 12300;
+    private static final long SLEEP_FROM = 12542;
+    private static final int WAIT_NIGHT_TIMEOUT = 20 * 60 * 5;
     private static final int SLEEP_TIMEOUT = 20 * 60 * 15;
     private static final int MAX_TRIES = 5;
 
     private State state = State.IDLE;
     private BlockPos bed;
-    private int timer, tries, cooldown, check;
+    private int timer, tries, cooldown, check, pathTimeout = MIN_PATH_TIMEOUT;
+    private double startDist;
+    private boolean wasThunder;
 
     SleepProcess() {
         super("SurvivalKit sleep", 15);
@@ -38,7 +44,7 @@ final class SleepProcess extends Feature {
 
     static boolean isNight(Minecraft mc) {
         Level lvl = mc.level;
-        return lvl != null && lvl.dimension() == Level.OVERWORLD && (lvl.isDarkOutside() || lvl.isThundering());
+        return lvl != null && lvl.dimension() == Level.OVERWORLD && (lvl.isDarkOutside() || (cfg.weather && lvl.isThundering()));
     }
 
     /** Cheap trigger check, once per client tick. */
@@ -49,12 +55,40 @@ final class SleepProcess extends Feature {
         if (state != State.IDLE || p == null || mc.level == null) return;
         if (cooldown > 0) { cooldown--; return; }
         if (!cfg.sleep || ++check % 20 != 0) return;
-        if (!Util.baritoneBusy() || !isNight(mc) || p.isSleeping() || Util.guiOpen(p)) return;
+        boolean thunder = mc.level.dimension() == Level.OVERWORLD && mc.level.isThundering();
+        if (thunder != wasThunder) {
+            wasThunder = thunder;
+            if (cfg.weather) Util.msg(thunder ? "A thunderstorm started: monsters can spawn in daylight, and beds work now."
+                    : "The thunderstorm is over.");
+        }
+        if (!Util.mayAct() || p.isSleeping() || Util.guiOpen(p)) return;
+        boolean night = isNight(mc);
+        if (!night && !(cfg.bedPlan && departureDue(mc, p))) return;
         if (cfg.bed == null) {
-            Util.warn("nobed", "It is night but no bed is saved. Look at your bed and run /survival bed set (or /survival sleep off).");
+            if (night) Util.warn("nobed", "It is night but no bed is saved. Look at your bed and run /survival bed set (or /survival sleep off).");
             return;
         }
         start(mc);
+    }
+
+    /** Walking time to the bed in ticks, from the straight-line distance, plus the configured slack. */
+    private static double travelTicks(LocalPlayer p) {
+        BlockPos bed = Util.pos(cfg.bed);
+        double dist = Math.sqrt(bed.distSqr(p.blockPosition()));
+        return dist * cfg.ticksPerBlock + cfg.bedLead * 20.0;
+    }
+
+    /**
+     * True when it is time to leave for the bed to be there by dusk (before mobs spawn): the later in the afternoon
+     * and the further away the bed is, the sooner. Nothing happens while the bed is so close that leaving now would
+     * only mean standing around.
+     */
+    private static boolean departureDue(Minecraft mc, LocalPlayer p) {
+        Level lvl = mc.level;
+        if (lvl == null || lvl.dimension() != Level.OVERWORLD || cfg.bed == null) return false;
+        long time = lvl.getOverworldClockTime() % 24000L;
+        if (time < 6000 || time >= SLEEP_FROM) return false;   // morning/noon: far too early; at night the normal trigger applies
+        return ARRIVE_BY - time <= travelTicks(p);
     }
 
     /** /survival sleep now */
@@ -77,7 +111,17 @@ final class SleepProcess extends Feature {
         timer = 0;
         tries = 0;
         state = State.PATHING;
-        Util.msg("Night: going to bed at " + bed.toShortString());
+        startDist = Math.sqrt(bed.distSqr(mc.player.blockPosition()));
+        double travel = travelTicks(mc.player);
+        pathTimeout = (int) Math.max(MIN_PATH_TIMEOUT, travel * 2 + 400);
+        if (isNight(mc)) {
+            Util.msg((mc.level.isThundering() && !mc.level.isDarkOutside() ? "Thunderstorm" : "Night") + ": going to bed at " + bed.toShortString());
+        } else {
+            long time = mc.level.getOverworldClockTime() % 24000L;
+            Util.msg("Dusk is near (" + Math.max(0, (SLEEP_FROM - time)) / 20 + " s until beds work): the bed is "
+                    + Math.round(Math.sqrt(bed.distSqr(mc.player.blockPosition()))) + " blocks away, about " + Math.round(travel / 20)
+                    + " s with slack - leaving now to be there before mobs spawn.");
+        }
     }
 
     @Override
@@ -95,17 +139,35 @@ final class SleepProcess extends Feature {
 
         switch (state) {
             case PATHING -> {
-                if (timer > PATH_TIMEOUT) return fail("Could not reach the bed in time.");
+                if (timer > pathTimeout) return fail("Could not reach the bed in time.");
                 if (calcFailed) return fail("Baritone found no path to the bed.");
                 GoalNear goal = new GoalNear(bed, 2);
                 if (goal.isInGoal(p.blockPosition())) {
-                    state = State.ENTERING;
+                    learnPace();
+                    state = isNight(mc) ? State.ENTERING : State.WAITING;
                     timer = 0;
+                    if (state == State.WAITING) Util.msg("At the bed, waiting for nightfall.");
                     return pause();
                 }
                 return new PathingCommand(goal, PathingCommandType.SET_GOAL_AND_PATH);
             }
+            case WAITING -> {
+                // early at the bed: hold still until it can be slept in (the mobs outside cannot reach us in a house)
+                if (isNight(mc)) {
+                    state = State.ENTERING;
+                    timer = 0;
+                    return pause();
+                }
+                if (timer > WAIT_NIGHT_TIMEOUT) return fail("Waited five minutes at the bed and it never got dark.");
+                return pause();
+            }
             case ENTERING -> {
+                if (!isNight(mc)) {   // the storm passed while we walked
+                    state = State.IDLE;
+                    cooldown = 20 * 10;
+                    Util.msg("It is not night any more - no need to sleep.");
+                    return pause();
+                }
                 if (p.isSleeping()) {
                     state = State.SLEEPING;
                     timer = 0;
@@ -131,6 +193,17 @@ final class SleepProcess extends Feature {
                 return defer();
             }
         }
+    }
+
+    /** After a trip of a useful length: the pace actually walked becomes the plan for the next departure. */
+    private void learnPace() {
+        if (startDist < 15 || timer < 40) return;
+        double sample = timer / startDist;
+        double old = cfg.ticksPerBlock;
+        cfg.ticksPerBlock = Math.max(3.0, Math.min(14.0, old * 0.7 + sample * 0.3));
+        Config.save();
+        Util.msg(String.format("Bed trip: %d blocks in %d s (%.1f ticks per block). Next time I plan with %.1f.",
+                Math.round(startDist), timer / 20, sample, cfg.ticksPerBlock));
     }
 
     private PathingCommand fail(String why) {

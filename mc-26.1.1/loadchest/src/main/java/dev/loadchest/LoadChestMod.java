@@ -79,6 +79,8 @@ public class LoadChestMod implements ClientModInitializer {
         boolean auto = false;
         boolean pickup = false;
         boolean pickupAll = false;   // false: only items from blocks Baritone broke; true: every item nearby
+        boolean nearBase = true;     // also empty the inventory when passing the base (chests / bed), not only when full
+        int baseRadius = 24;
         int[] chest = null;
         Map<String, Integer> keep = new LinkedHashMap<>();
     }
@@ -186,8 +188,29 @@ public class LoadChestMod implements ClientModInitializer {
                                 }))
                                 .then(ClientCommands.literal("off").executes(ctx -> {
                                     cfg.auto = false;
+                                    waiting = false;
                                     saveConfig();
                                     msg("Auto-empty off.");
+                                    return 1;
+                                })))
+                        .then(ClientCommands.literal("nearbase")
+                                .then(ClientCommands.literal("on").executes(ctx -> {
+                                    cfg.nearBase = true;
+                                    saveConfig();
+                                    msg("Near-base on: when Baritone passes within " + cfg.baseRadius + " blocks of the chests/bed and the inventory holds "
+                                            + BASE_MIN_STACKS + "+ stacks of loot, it empties into the chest on the way.");
+                                    return 1;
+                                }))
+                                .then(ClientCommands.literal("off").executes(ctx -> {
+                                    cfg.nearBase = false;
+                                    saveConfig();
+                                    msg("Near-base off: only a full inventory triggers a trip.");
+                                    return 1;
+                                }))
+                                .then(ClientCommands.argument("radius", IntegerArgumentType.integer(4, 96)).executes(ctx -> {
+                                    cfg.baseRadius = IntegerArgumentType.getInteger(ctx, "radius");
+                                    saveConfig();
+                                    msg("Base radius: " + cfg.baseRadius + " blocks.");
                                     return 1;
                                 })))
                         .then(ClientCommands.literal("debug")
@@ -431,6 +454,7 @@ public class LoadChestMod implements ClientModInitializer {
         if (!registered) {
             baritone().getPathingControlManager().registerProcess(depositProcess);
             baritone().getPathingControlManager().registerProcess(pickupProcess);
+            baritone().getPathingControlManager().registerProcess(new WaitProcess());
             baritone().getGameEventHandler().registerEventListener(new AbstractGameEventListener() {
                 @Override
                 public void onBlockChange(BlockChangeEvent event) {
@@ -442,7 +466,15 @@ public class LoadChestMod implements ClientModInitializer {
                     if (event.getType() == BlockInteractEvent.Type.START_BREAK) lastMiningTick = gameTick;
                 }
             });
+            PauseWatch.register(baritone());
             registered = true;
+        }
+        if (PauseWatch.paused) {   // #pause: no chest trips, no pickups
+            if (state != State.IDLE) {
+                if (p.containerMenu != p.inventoryMenu) p.closeContainer();
+                stop("Paused - chest trip cancelled.");
+            }
+            return;
         }
         trackOwnDrops(mc, p);
 
@@ -457,6 +489,26 @@ public class LoadChestMod implements ClientModInitializer {
                     saveConfig();
                     msg("Auto-empty turned off (no chest). Set one with /loadchest set, then /loadchest auto on.");
                 }
+            } else if (waiting) {
+                // The chest was full: the task stays paused (other jobs like sleeping or restocking still run) and
+                // the chest is looked at again every couple of minutes.
+                if (!baritoneBusy() || !cfg.auto) {
+                    waiting = false;   // the task was cancelled or auto-empty switched off
+                } else if (!inventoryFull(p)) {
+                    waiting = false;
+                    msg("The inventory has room again - carrying on.");
+                } else if (++waitTicks >= RETRY_TICKS) {
+                    waitTicks = 0;
+                    if (start("", null, false) == 1) autoRun = true;
+                }
+            } else if (baseCooldown > 0) {
+                baseCooldown--;
+            } else if (cfg.auto && cfg.nearBase && cfg.chest != null && ++baseCheck % 20 == 0 && baritoneBusy()
+                    && atBase(p) && lootStacks(p) >= BASE_MIN_STACKS) {
+                // already at the base: emptying now costs a few steps instead of a full trip later
+                msg("Passing the base - emptying the inventory while I am here.");
+                baseCooldown = BASE_COOLDOWN;
+                if (start("", null, false) == 1) autoRun = true;
             }
             return;
         }
@@ -523,11 +575,55 @@ public class LoadChestMod implements ClientModInitializer {
             boolean match = k.equals("@food") ? st.has(DataComponents.FOOD) : path.contains(k);
             if (match) return e.getValue();
         }
+        // Anything SurvivalKit restocks (/survival want ...) stays too, or the two addons would fight each other.
+        for (String k : skWanted) if (path.contains(k)) return -1;
+        // Tools are working equipment, never mined loot: keep them... unless they are worn out. Those would only pile
+        // up and fill the inventory (SurvivalKit hands in the ones it restocks itself).
+        for (String t : TOOLS) {
+            if (path.endsWith(t)) return st.isDamageableItem() && wornOut(st) ? 0 : -1;
+        }
         return 0;   // no rule -> keep nothing
+    }
+
+    /** Same rule as Baritone's item saver: it stops using a tool at this point. */
+    private static boolean wornOut(ItemStack st) {
+        var settings = BaritoneAPI.getSettings();
+        if (settings.itemSaver.value) {
+            return st.getMaxDamage() > 1 && st.getDamageValue() + settings.itemSaverThreshold.value >= st.getMaxDamage();
+        }
+        return st.getDamageValue() > st.getMaxDamage() * 0.8;
+    }
+
+    private static final String[] TOOLS = {"_pickaxe", "_axe", "_shovel", "_hoe", "_sword", "shears", "bucket",
+            "fishing_rod", "flint_and_steel", "trident", "bow", "crossbow", "shield", "elytra"};
+
+    /** Item names from SurvivalKit's restock list; re-read for every deposit so edits apply at once. */
+    private static List<String> skWanted = new ArrayList<>();
+
+    private static void loadSkWanted() {
+        List<String> out = new ArrayList<>();
+        try {
+            Path p = FabricLoader.getInstance().getConfigDir().resolve("survivalkit.json");
+            if (Files.exists(p)) {
+                try (Reader r = Files.newBufferedReader(p)) {
+                    com.google.gson.JsonObject o = com.google.gson.JsonParser.parseReader(r).getAsJsonObject();
+                    if (o.has("want") && o.get("want").isJsonObject()) {
+                        for (String k : o.getAsJsonObject("want").keySet()) {
+                            if (k.startsWith("@")) continue;
+                            String item = k.split(" ")[0];   // a rule may carry enchantments after the item
+                            out.add(item.substring(item.indexOf(':') + 1));
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        skWanted = out;
     }
 
     private ArrayDeque<Action> buildPlan(LocalPlayer p, AbstractContainerMenu h) {
         ArrayDeque<Action> plan = new ArrayDeque<>();
+        loadSkWanted();
 
         // player slots by inventory index (0-8 hotbar, 9-35 main), and chest slots
         Slot[] mine = new Slot[36];
@@ -539,6 +635,8 @@ public class LoadChestMod implements ClientModInitializer {
                 chest.add(s);
             }
         }
+
+        chestFull = chest.stream().noneMatch(s -> s.getItem().isEmpty());
 
         // total per item over the WHOLE inventory (hotbar counts towards keep limits)
         Map<String, Integer> total = new HashMap<>();
@@ -628,22 +726,115 @@ public class LoadChestMod implements ClientModInitializer {
     /** Ends the chest trip; DepositProcess goes inactive and Baritone hands control back (e.g. to #mine). */
     private void stop(String text) {
         state = State.IDLE;
+        triedChests.clear();
         queue = null;
         autoRun = false;
         msg(text);
     }
 
+    private static boolean isContainer(Block b) {
+        return b instanceof ChestBlock || b instanceof net.minecraft.world.level.block.BarrelBlock;
+    }
+
+    /** The nearest chest/barrel (within 10 blocks of the saved one) that this trip has not used yet. */
+    private BlockPos findOverflowChest(Minecraft mc) {
+        if (cfg.chest == null) return null;
+        BlockPos home = new BlockPos(cfg.chest[0], cfg.chest[1], cfg.chest[2]);
+        BlockPos best = null;
+        double bestD = Double.MAX_VALUE;
+        for (BlockPos pos : BlockPos.betweenClosed(home.offset(-10, -4, -10), home.offset(10, 4, 10))) {
+            if (!isContainer(mc.level.getBlockState(pos).getBlock())) continue;
+            boolean used = false;   // the other half of a double chest counts as used too
+            for (BlockPos t : triedChests) {
+                if (t.distSqr(pos) <= 1) { used = true; break; }
+            }
+            if (used) continue;
+            double d = pos.distSqr(home);
+            if (d < bestD) { bestD = d; best = pos.immutable(); }
+        }
+        return best;
+    }
+
     private void finishDeposit(LocalPlayer p, String text) {
         p.closeContainer();
+        // The chest had no room left for loot that is still in the inventory: carry on with the next chest nearby.
+        if (chestFull && lootStacks(p) > 0 && target != null) {
+            triedChests.add(target);
+            BlockPos next = findOverflowChest(Minecraft.getInstance());
+            if (next != null) {
+                msg("That chest is full - continuing with the one at " + next.toShortString() + ".");
+                target = next;
+                triedChests.add(next);
+                queue = null;
+                timer = 0;
+                state = State.PATHING;
+                return;
+            }
+            msg("PROBLEM: the deposit chest is full and there is no other chest or barrel within 10 blocks of it. "
+                    + "Empty it or put another chest next to it.");
+        }
+        triedChests.clear();
         boolean wasAuto = autoRun;
         stop(text);
         if (wasAuto && inventoryFull(p)) {   // would loop chest <-> mine forever
-            cfg.auto = false;
-            saveConfig();
-            baritone().getPathingBehavior().cancelEverything();
-            msg("Inventory is still full (chest full, or everything is protected by keep rules). "
-                    + "Stopped mining and turned auto-empty off.");
+            if (!waiting) {
+                msg("PROBLEM: The inventory is still full (the chest is full, or everything left is protected by keep rules). "
+                        + "The task waits and I look at the chest again every 2 minutes; sleeping, restocking and fighting still happen. "
+                        + "Empty the chest to get going sooner.");
+            }
+            waiting = true;
+            waitTicks = 0;
         }
+    }
+
+    private static final int BASE_MIN_STACKS = 8;              // loot stacks that make a visit worthwhile
+    private static final int BASE_COOLDOWN = 20 * 60 * 3;      // at most one opportunistic visit per 3 minutes
+    private int baseCheck, baseCooldown;
+    private boolean chestFull, waiting;
+    private int waitTicks;
+    private final Set<BlockPos> triedChests = new HashSet<>();
+    private static final int RETRY_TICKS = 20 * 120;   // look at a full chest again every 2 minutes
+    private List<BlockPos> skSites = new ArrayList<>();
+    private int skSitesAge = 1000;
+
+    /** True within baseRadius of the deposit chest or of SurvivalKit's supply chest, return chest or bed. */
+    private boolean atBase(LocalPlayer p) {
+        if (++skSitesAge > 100) {   // re-read every ~5 s of checking
+            skSitesAge = 0;
+            List<BlockPos> out = new ArrayList<>();
+            try {
+                Path path = FabricLoader.getInstance().getConfigDir().resolve("survivalkit.json");
+                if (Files.exists(path)) {
+                    try (Reader r = Files.newBufferedReader(path)) {
+                        com.google.gson.JsonObject o = com.google.gson.JsonParser.parseReader(r).getAsJsonObject();
+                        for (String key : new String[]{"supply", "returnChest", "bed"}) {
+                            if (o.has(key) && o.get(key).isJsonArray() && o.getAsJsonArray(key).size() >= 3) {
+                                var a = o.getAsJsonArray(key);
+                                out.add(new BlockPos(a.get(0).getAsInt(), a.get(1).getAsInt(), a.get(2).getAsInt()));
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            skSites = out;
+        }
+        long r2 = (long) cfg.baseRadius * cfg.baseRadius;
+        BlockPos me = p.blockPosition();
+        if (new BlockPos(cfg.chest[0], cfg.chest[1], cfg.chest[2]).distSqr(me) <= r2) return true;
+        for (BlockPos s : skSites) if (s.distSqr(me) <= r2) return true;
+        return false;
+    }
+
+    /** Stacks in the main inventory that no keep rule protects, i.e. what a deposit would actually move. */
+    private static int lootStacks(LocalPlayer p) {
+        loadSkWanted();
+        int n = 0;
+        for (int i = 9; i < 36; i++) {
+            ItemStack st = p.getInventory().getItem(i);
+            if (!st.isEmpty() && keepFor(st) == 0) n++;
+        }
+        return n;
     }
 
     private static boolean inventoryFull(LocalPlayer p) {
@@ -736,6 +927,39 @@ public class LoadChestMod implements ClientModInitializer {
     }
 
     /** While Baritone is busy, walks within reach of the items Baritone itself mined so nothing is left behind. */
+    /** Keeps the task paused while the chest is full; below every other job so those still get their turn. */
+    private class WaitProcess implements IBaritoneProcess {
+        @Override
+        public boolean isActive() {
+            return waiting && state == State.IDLE;
+        }
+
+        @Override
+        public PathingCommand onTick(boolean calcFailed, boolean isSafeToCancel) {
+            return new PathingCommand(null, PathingCommandType.REQUEST_PAUSE);
+        }
+
+        @Override
+        public boolean isTemporary() {
+            return true;
+        }
+
+        @Override
+        public void onLostControl() {
+            // other jobs take over now and then: that is no reason to stop waiting
+        }
+
+        @Override
+        public double priority() {
+            return 3;
+        }
+
+        @Override
+        public String displayName0() {
+            return "LoadChest waiting";
+        }
+    }
+
     private class PickupProcess implements IBaritoneProcess {
         private ItemEntity item;
         private int itemTimer;    // ticks spent on this item
