@@ -1,0 +1,43 @@
+name: In-game tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'mc-26.1.1/**'
+      - '.github/workflows/ingame-tests.yml'
+
+jobs:
+  ingame-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Install virtual screen and software graphics
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri mesa-vulkan-drivers
+
+      - name: Download Baritone
+        run: |
+          mkdir -p mc-26.1.1/loadchest/libs
+          curl -fsSL -o mc-26.1.1/loadchest/libs/baritone-api-fabric-1.18.0.jar \
+            https://github.com/cabaletta/baritone/releases/download/v1.18.0/baritone-api-fabric-1.18.0.jar
+
+      - name: Run the tests
+        run: sh mc-26.1.1/ingametest/run-tests.sh
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingame-test-results
+          if-no-files-found: warn
+          path: |
+            mc-26.1.1/ingametest/build/run/clientGameTest/ingametest-report.txt
+            mc-26.1.1/ingametest/build/run/clientGameTest/screenshots/
+            mc-26.1.1/ingametest/build/run/clientGameTest/logs/

@@ -1,0 +1,62 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.maven_group
+
+repositories {
+    // baritone-api-fabric-<version>.jar lives in ./libs (run-tests copies it from ../loadchest/libs)
+    flatDir { dirs 'libs' }
+}
+
+// Folders next to this one whose finished jars are put into the test game (see gradle.properties)
+def addonFolders = project.addons.split(',').collect { it.trim() }.findAll { !it.isEmpty() }
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+    implementation name: "baritone-api-fabric-${project.baritone_version}"
+
+    // The real jars the addons ship as, built beforehand by run-tests.bat / run-tests.sh
+    addonFolders.each { folder ->
+        implementation fileTree(dir: "../${folder}/build/libs", include: '*.jar', exclude: '*-sources.jar')
+    }
+}
+
+fabricApi {
+    configureTests {
+        createSourceSet = false          // this whole project is the test mod
+        modId = 'ingametest'
+        enableGameTests = false          // server-side game tests: Baritone only runs on a client
+        enableClientGameTests = true
+    }
+}
+
+loom {
+    runs.matching { it.name == 'clientGameTest' }.configureEach {
+        // Fabric's docs: client tests can fail on GitHub Actions without this
+        if (System.getenv('CI') != null) {
+            vmArg '-Dfabric.client.gametest.disableNetworkSynchronizer=true'
+        }
+    }
+}
+
+processResources {
+    def version = project.version
+    inputs.property "version", version
+
+    filesMatching("fabric.mod.json") {
+        expand "version": version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 25
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}

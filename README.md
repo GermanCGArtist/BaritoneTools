@@ -12,6 +12,8 @@ Addons for [Baritone](https://github.com/cabaletta/baritone), written for **Mine
 
 All of them hook into Baritone as temporary processes, so a running `#mine` / `#farm` / `#build` / `#sel ca` is paused and then continues by itself.
 
+[`mc-26.1.1/ingametest`](mc-26.1.1/ingametest) holds automatic in-game tests: a real client plays through test scenarios with the real addon jars.
+
 ## Installing (players)
 Put these in your `mods` folder:
 - Fabric API for 26.1.1 (tested with 0.145.4)

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "ingametest",
+  "version": "${version}",
+  "name": "BaritoneTools in-game tests",
+  "description": "Automatic in-game tests for the BaritoneTools addons. Not for players.",
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "fabric-client-gametest": ["dev.ingametest.InGameTests"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "fabric-api": "*",
+    "minecraft": "~26.1.1",
+    "baritone": "*",
+    "java": ">=25"
+  }
+}
